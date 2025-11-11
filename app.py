@@ -27,14 +27,33 @@ st.set_page_config(
 st.title("🎬 VT MVP — English ➜ German Video Translator")
 st.caption("Translates captions, clones voice automatically, and retimes the video to match German speech.")
 
+# ------------------------------------------------------------------
+# Inputs
+# ------------------------------------------------------------------
 uploaded_video = st.file_uploader("Upload source video (mp4/mov/mkv)", type=["mp4", "mov", "mkv"])
 uploaded_srt = st.file_uploader("Upload SRT captions (English)", type=["srt"])
+
+# ------------------------------------------------------------------
+# Session state
+# ------------------------------------------------------------------
+if "video_ready" not in st.session_state:
+    st.session_state.video_ready = False
+if "video_path" not in st.session_state:
+    st.session_state.video_path = None
+if "audio_path" not in st.session_state:
+    st.session_state.audio_path = None
+
 run = st.button("Run Translation to German")
 
 # ------------------------------------------------------------------
 # Main process
 # ------------------------------------------------------------------
 if run:
+    # reset previous outputs when user starts a new run
+    st.session_state.video_ready = False
+    st.session_state.video_path = None
+    st.session_state.audio_path = None
+
     if not uploaded_video or not uploaded_srt:
         st.error("Please upload both a video and an SRT file.")
         st.stop()
@@ -67,12 +86,15 @@ if run:
         # Step 3: Extract voice sample
         status.info("🎙 Extracting short voice sample from video...")
         clip = VideoFileClip(video_path)
-        sample_duration = min(20, max(3, clip.duration))
-        sample_wav = os.path.join(tmpdir, "sample.wav")
-        clip.audio.subclip(0, sample_duration).write_audiofile(
-            sample_wav, fps=44100, nbytes=2, codec="pcm_s16le", verbose=False
-        )
-        clip.close()
+        try:
+            sample_duration = min(20, max(3, clip.duration))
+            sample_wav = os.path.join(tmpdir, "sample.wav")
+            # MoviePy 1.0.3: no logger arg; verbose flag supported
+            clip.audio.subclip(0, sample_duration).write_audiofile(
+                sample_wav, fps=44100, nbytes=2, codec="pcm_s16le", verbose=False
+            )
+        finally:
+            clip.close()
 
         # Step 4: Clone voice and generate German TTS
         status.info("🧬 Cloning voice and generating German TTS...")
@@ -83,39 +105,50 @@ if run:
         status.info("🔊 Synthesizing German audio segments...")
         audio_items = vg.generate_audio_segments(segments_de, voice_id=voice_id)
 
-        # Step 6: Assemble final video
+        # Step 6: Assemble final video (retimed to audio; MoviePy 1.0.3)
         status.info("🎞 Assembling final translated video (this may take a few minutes)...")
         ensure_dir("output")
         out_path = "output/final_video_de.mp4"
         out_path = create_final_video(video_path, segments_de, audio_items, out_path=out_path)
 
-        # Step 7: Extract final audio track
+        # Step 7: Extract final audio track from the rendered video
         status.info("🎧 Exporting German audio track...")
         audio_out_path = "output/final_audio_de.mp3"
-        audio_clip = AudioFileClip(out_path)
-        audio_clip.write_audiofile(audio_out_path, verbose=False)
-        audio_clip.close()
+        final_audio = AudioFileClip(out_path)
+        try:
+            final_audio.write_audiofile(audio_out_path, verbose=False)
+        finally:
+            final_audio.close()
 
-        # Step 8: Display results
+        # Persist results in session_state so they survive reruns (e.g., download clicks)
+        st.session_state.video_path = out_path
+        st.session_state.audio_path = audio_out_path
+        st.session_state.video_ready = True
+
         status.success("✅ Translation complete!")
 
-        st.video(out_path)
-        col1, col2 = st.columns(2)
-        with col1:
-            with open(out_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Download Translated Video (MP4)",
-                    f,
-                    file_name="final_video_de.mp4",
-                    mime="video/mp4",
-                )
-        with col2:
-            with open(audio_out_path, "rb") as f:
-                st.download_button(
-                    "🎧 Download German Audio Only (MP3)",
-                    f,
-                    file_name="final_audio_de.mp3",
-                    mime="audio/mpeg",
-                )
-
-        status.empty()
+# ------------------------------------------------------------------
+# Display persisted results
+# ------------------------------------------------------------------
+if st.session_state.video_ready:
+    st.video(st.session_state.video_path)
+    col1, col2 = st.columns(2)
+    with col1:
+        # unique keys avoid widget identity clash on rerun
+        with open(st.session_state.video_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Translated Video (MP4)",
+                f,
+                file_name="final_video_de.mp4",
+                mime="video/mp4",
+                key="video_download"
+            )
+    with col2:
+        with open(st.session_state.audio_path, "rb") as f:
+            st.download_button(
+                "🎧 Download German Audio Only (MP3)",
+                f,
+                file_name="final_audio_de.mp3",
+                mime="audio/mpeg",
+                key="audio_download"
+            )
