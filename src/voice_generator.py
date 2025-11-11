@@ -1,4 +1,4 @@
-import os, io, time
+import os, io
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from pydub import AudioSegment
@@ -21,7 +21,6 @@ class VoiceGenerator:
         self,
         out_dir: str = "output/audio",
         eleven_api_key: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
         eleven_model: str = DEFAULT_ELEVEN_MODEL,
         stability: float = 0.45,
         similarity_boost: float = 0.7,
@@ -32,11 +31,11 @@ class VoiceGenerator:
         os.makedirs(self.out_dir, exist_ok=True)
 
         self.eleven_api_key = eleven_api_key or os.environ.get("ELEVEN_API_KEY")
-        self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
+        if not self.eleven_api_key:
+            raise ValueError("ELEVEN_API_KEY is required for TTS.")
         self.eleven_model = eleven_model
 
-        self.eleven = ElevenLabs(api_key=self.eleven_api_key) if self.eleven_api_key else None
-        self.openai = OpenAIClient(api_key=self.openai_api_key) if self.openai_api_key else None
+        self.eleven = ElevenLabs(api_key=self.eleven_api_key)
 
         self.voice_settings = VoiceSettings(
             stability=stability,
@@ -50,14 +49,9 @@ class VoiceGenerator:
     # ---------------- Voice cloning ----------------
     def clone_voice_from_sample(self, sample_wav_path: str, name: str = "auto_clone") -> str:
         """Create an Instant Voice Clone via ElevenLabs API and return voice_id."""
-        if not self.eleven:
-            raise ValueError("ElevenLabs client not initialized. ELEVEN_API_KEY is required.")
-
-        # Read the sample audio file
         with open(sample_wav_path, "rb") as f:
             sample_bytes = f.read()
 
-        # Create the voice clone using the "ivc.create" method
         voice = self.eleven.voices.ivc.create(
             name=name,
             description="Auto-clone from VT MVP sample",
@@ -71,62 +65,51 @@ class VoiceGenerator:
         self._cached_voice_id = voice_id
         return voice_id
 
-    def ensure_voice(self, sample_wav_path: Optional[str]) -> Optional[str]:
+    def ensure_voice(self, sample_wav_path: Optional[str]) -> str:
         if self._cached_voice_id:
             return self._cached_voice_id
-        if self.eleven and sample_wav_path:
-            return self.clone_voice_from_sample(sample_wav_path)
-        return None
+        if not sample_wav_path:
+            raise ValueError("A sample WAV path is required to clone the voice.")
+        return self.clone_voice_from_sample(sample_wav_path)
 
     # ---------------- Synthesis ----------------
     def generate_audio_segments(
         self,
         segments: List[Segment],
-        prefer: str = "elevenlabs",
         voice_id: Optional[str] = None
     ) -> List[Dict]:
         """
-        Generate audio files for each translated segment.
-        Prints the duration of each synthesized clip for debugging.
+        Generate audio files for each translated segment using ElevenLabs only.
+        Returns a list of dicts with index, path, and measured duration.
         """
+        if not (voice_id or self._cached_voice_id):
+            raise ValueError("No ElevenLabs voice_id available. Call ensure_voice() first or pass voice_id.")
+
+        vid = voice_id or self._cached_voice_id
         results: List[Dict] = []
 
-        if prefer == "elevenlabs" and self.eleven:
-            if not voice_id and not self._cached_voice_id:
-                raise ValueError("No ElevenLabs voice_id available. Call ensure_voice() first or pass voice_id.")
+        for seg in segments:
+            text = (seg.text or "").strip()
+            out_path = os.path.join(self.out_dir, f"seg_{seg.index:04d}.mp3")
 
-            vid = voice_id or self._cached_voice_id
+            # Synthesize or create silent filler
+            if text:
+                audio_bytes = self._synthesize_eleven(text, vid)
+                with open(out_path, "wb") as f:
+                    f.write(audio_bytes)
+            else:
+                AudioSegment.silent(
+                    duration=max(200, int((seg.end - seg.start) * 1000))
+                ).export(out_path, format="mp3")
 
-            print("\n Generating ElevenLabs audio segments...\n")
+            dur = AudioSegment.from_file(out_path).duration_seconds
+            results.append({
+                "index": seg.index,
+                "path": out_path,
+                "duration": dur
+            })
 
-            for seg in segments:
-                text = (seg.text or "").strip()
-                out_path = os.path.join(self.out_dir, f"seg_{seg.index:04d}.mp3")
-
-                # Synthesize or create silent filler
-                if text:
-                    audio_bytes = self._synthesize_eleven(text, vid)
-                    with open(out_path, "wb") as f:
-                        f.write(audio_bytes)
-                else:
-                    AudioSegment.silent(
-                        duration=max(200, int((seg.end - seg.start) * 1000))
-                    ).export(out_path, format="mp3")
-
-                # Measure and display duration
-                dur = AudioSegment.from_file(out_path).duration_seconds
-                print(f"[Segment {seg.index:03d}] → {dur:.2f} seconds | Text: {text[:60]}")
-
-                results.append({
-                    "index": seg.index,
-                    "path": out_path,
-                    "duration": dur
-                })
-
-            print("\n Finished generating ElevenLabs audio segments.\n")
-            return results
-
-    
+        return results
 
     def _synthesize_eleven(self, text: str, voice_id: str) -> bytes:
         # Non-streaming synthesis to MP3 bytes
@@ -141,13 +124,3 @@ class VoiceGenerator:
         for chunk in audio:
             buf.write(chunk)
         return buf.getvalue()
-
-    def _synthesize_openai_tts(self, text: str) -> bytes:
-        # Uses OpenAI Audio API; model name may evolve. 'gpt-4o-mini-tts' widely available.
-        resp = self.openai.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="alloy",
-            input=text,
-            format="mp3",
-        )
-        return resp.read()
