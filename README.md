@@ -95,7 +95,7 @@ pip install -r requirements.txt
 ```
 
 ### 4) Set your OpenAI & elevenlabs API Keys
-`.env` and set your keys:
+Go to `.env` and set your keys:
 
 ```
 OPENAI_API_KEY=your-api-key-here
