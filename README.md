@@ -7,7 +7,7 @@ Translate an English-captioned video into **German** while preserving identity, 
 ## What it does (TL;DR)
 
 - **Parses SRT captions** and normalizes multi-line cues
-- **Translates** each cue **EN → DE** using OpenAI LLM.
+- **Translates** each cue **EN → DE** using an OpenAI LLM.
 - **Clones the speaker’s voice** from a short sample (ElevenLabs IVC)
 - **Synthesizes German audio per segment** (ElevenLabs TTS)
 - **Renders the final MP4** and an **audio-only MP3**
@@ -72,7 +72,7 @@ Option 1 — using **Chocolatey** (recommended):
 choco install ffmpeg
 ```
 
-Option 2 — manual install (in case option 1 is no possible):
+Option 2 — manual install (in case option 1 is not possible):
 
 1. Go to [https://ffmpeg.org/download.html]
 2. Download the **Windows build** (e.g., `ffmpeg-release-essentials.zip`).
